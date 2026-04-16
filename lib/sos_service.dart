@@ -10,35 +10,60 @@ class SOSService {
   final String policeNumber = "112";
 
   Future<void> triggerSOS() async {
-    // Permission
-    LocationPermission permission = await Geolocator.requestPermission();
+    // ── Step 1: Check location permission ──
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
+      // Still try to send SOS without location
+      await _sendSOSAlerts("Location unavailable");
       return;
     }
 
-    // Location
-    Position position = await Geolocator.getCurrentPosition(
-      desiredAccuracy: LocationAccuracy.high,
-    );
+    // ── Step 2: Get position ──
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      final locationLink =
+          "https://maps.google.com/?q=${position.latitude},${position.longitude}";
+      await _sendSOSAlerts(locationLink);
+    } catch (_) {
+      await _sendSOSAlerts("Location unavailable");
+    }
+  }
 
-    String locationLink =
-        "https://maps.google.com/?q=${position.latitude},${position.longitude}";
+  Future<void> _sendSOSAlerts(String locationInfo) async {
+    final message =
+        "🚨 EMERGENCY!\nI need help.\nMy location:\n$locationInfo";
+    final encodedMsg = Uri.encodeComponent(message);
 
-    String message =
-        "🚨 EMERGENCY!\nI need help.\nMy location:\n$locationLink";
+    // ── SMS to trusted contacts ──
+    final numbers = trustedContacts.join(",");
+    final smsUri = Uri.parse("smsto:$numbers?body=$encodedMsg");
+    if (await canLaunchUrl(smsUri)) {
+      await launchUrl(smsUri, mode: LaunchMode.externalApplication);
+    }
 
-    // SMS
-    String numbers = trustedContacts.join(",");
-    await launchUrl(Uri.parse("smsto:$numbers?body=${Uri.encodeComponent(message)}"));
+    // ── Call police ──
+    final callUri = Uri.parse("tel:$policeNumber");
+    if (await canLaunchUrl(callUri)) {
+      await launchUrl(callUri, mode: LaunchMode.externalApplication);
+    }
 
-    // Call police
-    await launchUrl(Uri.parse("tel:$policeNumber"));
-
-    // WhatsApp
-    await launchUrl(
-      Uri.parse("https://wa.me/?text=${Uri.encodeComponent(message)}"),
-      mode: LaunchMode.externalApplication,
-    );
+    // ── WhatsApp broadcast ──
+    final waUri = Uri.parse("whatsapp://send?text=$encodedMsg");
+    if (await canLaunchUrl(waUri)) {
+      await launchUrl(waUri, mode: LaunchMode.externalApplication);
+    } else {
+      // Fallback: wa.me share link
+      final waFallback =
+      Uri.parse("https://wa.me/?text=$encodedMsg");
+      if (await canLaunchUrl(waFallback)) {
+        await launchUrl(waFallback, mode: LaunchMode.externalApplication);
+      }
+    }
   }
 }

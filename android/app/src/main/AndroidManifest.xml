@@ -7,14 +7,41 @@
 
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.SEND_SMS"/>
     <uses-permission android:name="android.permission.CALL_PHONE"/>
-
+    <!--  READ_CONTACTS: Required for flutter_contacts to fetch device contacts  -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
     <!-- REQUIRED for SMS on Android 11+ -->
     <queries>
         <intent>
             <action android:name="android.intent.action.SENDTO"/>
             <data android:scheme="smsto"/>
+        </intent>
+        <!--  Phone call  -->
+        <intent>
+            <action android:name="android.intent.action.DIAL"/>
+            <data android:scheme="tel"/>
+        </intent>
+        <!--  WhatsApp (package-based deep link)  -->
+        <package android:name="com.whatsapp"/>
+        <package android:name="com.whatsapp.w4b"/>
+        <!--  WhatsApp Business  -->
+        <!--  Google Maps (package-based)  -->
+        <package android:name="com.google.android.apps.maps"/>
+        <!--  Browser fallback for https:// links  -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="https"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="http"/>
+        </intent>
+        <!--  geo: URI for maps apps  -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="geo"/>
         </intent>
     </queries>
     <application

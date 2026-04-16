@@ -7,6 +7,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:ui';
+import 'trip_planning_screen.dart';
 void main() {
   runApp(const SafetyApp());
 }
@@ -229,13 +230,12 @@ class _HomePageState extends State<HomePage> {
                     //////////////////////////////////////////////////////
 // INPUT BOX
 //////////////////////////////////////////////////////
-
                     ClipRRect(
                       borderRadius: BorderRadius.circular(25),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                         child: Container(
-                          padding: const EdgeInsets.all(18),
+                          padding: const EdgeInsets.all(20),
                           decoration: BoxDecoration(
                             color: Colors.white.withOpacity(0.08),
                             borderRadius: BorderRadius.circular(25),
@@ -246,29 +246,46 @@ class _HomePageState extends State<HomePage> {
                           child: Column(
                             children: [
 
-                              _glassField(Icons.my_location, "Current location"),
+                              const Text(
+                                "Plan your trip safely",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
 
-                              const SizedBox(height: 12),
-
-                              _glassField(Icons.location_on, "Where to?"),
-
-                              const SizedBox(height: 12),
-
-                              _glassField(Icons.access_time, "Select time"),
-
-                              const SizedBox(height: 18),
+                              const SizedBox(height: 20),
 
                               SizedBox(
                                 width: double.infinity,
                                 child: ElevatedButton(
-                                  onPressed: predictSafety,
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => const TripPlanningScreen(),
+                                      ),
+                                    );
+                                  },
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.white.withOpacity(0.15),
-                                    elevation: 0,
+                                    backgroundColor: Colors.white24,
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 30, vertical: 15),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(15),
+                                    ),
                                   ),
-                                  child: const Text(
-                                    "Check Safety",
-                                    style: TextStyle(color: Colors.white),
+                                  child: const Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(Icons.directions, color: Colors.white),
+                                      SizedBox(width: 10),
+                                      Text(
+                                        "Plan Safe Trip",
+                                        style: TextStyle(color: Colors.white),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
@@ -277,6 +294,7 @@ class _HomePageState extends State<HomePage> {
                         ),
                       ),
                     ),
+
 
                     const SizedBox(height: 20), // 🔥 VERY IMPORTANT
 
