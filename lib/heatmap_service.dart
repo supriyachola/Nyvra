@@ -209,7 +209,7 @@ class HeatmapService {
 // ════════════════════════════════════════════════════════════════════════════
 
 class SafetyApiService {
-  static const Duration _timeout = Duration(seconds: 10);
+  static const Duration _timeout = Duration(seconds: 20);
 
   /// GET /predict_area?latitude=..&longitude=..
   static Future<AreaPredictionResult> predictArea({
