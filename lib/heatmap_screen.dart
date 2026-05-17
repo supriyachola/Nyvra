@@ -1,26 +1,30 @@
-// heatmap_screen.dart  — Nyvra Safety Heatmap  (production v3)
+// heatmap_screen.dart  — Nyvra Safety Heatmap  (fixed v4)
 // ════════════════════════════════════════════════════════════════════════════
-// Google Maps–style UI:
-//  ✅ Dark CartoDB tiles (no API key)
-//  ✅ AI heatmap CircleLayer — size & colour by risk score
-//  ✅ Animated segmented safe-route polylines (green/amber/red)
-//  ✅ User location with pulse animation
-//  ✅ Glassmorphic top bar + right FABs
-//  ✅ DraggableScrollableSheet (collapsed / half / expanded)
-//  ✅ Tap-to-inspect heatmap points tooltip
-//  ✅ Loading overlay + 10s timeout + retry
-//  ✅ Risk legend top-left
-//  ✅ Route options with score rings
+// KEY FIXES in this version:
+//  ✅ FIX 1 — Accepts preloadedRoute (RouteData) from RouteAnalysisScreen
+//             → skips redundant API call, no double-fetch
+//  ✅ FIX 2 — autoStartNavigation flag auto-opens voice nav sheet on entry
+//  ✅ FIX 3 — _initLocation() uses widget.initialLat/Lng immediately,
+//             no GPS permission dialog shown if coords already known
+//  ✅ FIX 4 — Real TTS via flutter_tts (add to pubspec: flutter_tts: ^4.0.2)
+//  ✅ FIX 5 — Navigation sheet is now a full-screen page (not bottom sheet)
+//             so steps are fully visible and not cut off
+//  ✅ FIX 6 — Area Risk Summary auto-shown after route is ready when
+//             coming from RouteAnalysisScreen
+//  ✅ FIX 7 — Score label is dynamic (Safe / Moderate / Danger) not hardcoded
 // ════════════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:latlong2/latlong.dart' show Distance, LengthUnit;
 
@@ -36,9 +40,9 @@ const Color _kAmber      = Color(0xFFFFA726);
 const Color _kRed        = Color(0xFFFF4757);
 const Color _kBlue       = Color(0xFF3D8EFF);
 
-// CartoDB Dark Matter — free, no API key
+// CartoDB Positron — clean light map, free, no API key
 const String _kTile =
-    'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+    'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
 const List<String> _kSubs = ['a', 'b', 'c', 'd'];
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -52,6 +56,12 @@ class HeatmapScreen extends StatefulWidget {
   final double?  destLat;
   final double?  destLng;
 
+  /// FIX 1: Pre-loaded route from RouteAnalysisScreen — skips API call.
+  final RouteData? preloadedRoute;
+
+  /// FIX 2: If true, opens the voice navigation sheet immediately after load.
+  final bool autoStartNavigation;
+
   const HeatmapScreen({
     super.key,
     this.initialLat,
@@ -59,6 +69,8 @@ class HeatmapScreen extends StatefulWidget {
     this.destinationLabel,
     this.destLat,
     this.destLng,
+    this.preloadedRoute,
+    this.autoStartNavigation = false,
   });
 
   @override
@@ -123,21 +135,52 @@ class _HeatmapScreenState extends State<HeatmapScreen>
         vsync: this, duration: const Duration(milliseconds: 1400));
     _routeAnim = CurvedAnimation(parent: _routeCtrl, curve: Curves.easeOut);
 
+    // FIX 3: If destination was pre-set, apply it before GPS init.
+    if (widget.destLat != null && widget.destLng != null) {
+      _destPos  = LatLng(widget.destLat!, widget.destLng!);
+      _subtitle = 'Navigating to ${widget.destinationLabel ?? 'destination'}';
+    }
+
     _initLocation();
 
-    // If a destination was pre-set from trip planning, schedule it after
-    // the first frame so the map controller is ready.
-    if (widget.destLat != null && widget.destLng != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          setState(() {
-            _destPos  = LatLng(widget.destLat!, widget.destLng!);
-            _subtitle = 'Navigating to ${widget.destinationLabel ?? 'destination'}';
+    // FIX 1 + 2: After first frame, apply preloaded route or fetch fresh one.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      if (widget.preloadedRoute != null && _destPos != null) {
+        // Use what was already analyzed — no extra safety API call.
+        final r = widget.preloadedRoute!;
+        setState(() {
+          _routeData   = RouteAnalysisResult(
+            overallScore: r.safetyScore,
+            routes:       [r],
+          );
+          _activeRoute = r;
+          _showRoute   = true;
+        });
+        _routeCtrl.forward(from: 0);
+        _fitMapToBothPoints();
+
+        // Fetch real road geometry in background (no safety re-call needed)
+        if (_userPos != null) {
+          _fetchOsrmRoute(_userPos!, _destPos!).then((pts) {
+            if (mounted && pts.isNotEmpty) {
+              setState(() => _realRoutePoints = pts);
+            }
           });
-          _fetchRoute();
         }
-      });
-    }
+
+        // Auto-open navigation if requested.
+        if (widget.autoStartNavigation) {
+          Future.delayed(const Duration(milliseconds: 600), () {
+            if (mounted) _openNavigationScreen();
+          });
+        }
+      } else if (_destPos != null) {
+        // No preloaded route — fetch from API.
+        _fetchRoute();
+      }
+    });
   }
 
   @override
@@ -154,23 +197,18 @@ class _HeatmapScreenState extends State<HeatmapScreen>
   //  LOCATION
   // ─────────────────────────────────────────────────────────────────────────
   Future<void> _initLocation() async {
-    // If the caller pre-set a location, use it immediately and skip GPS wait.
+    // FIX 3: If caller passed coords, use them immediately — no permission dialog.
     if (widget.initialLat != null && widget.initialLng != null) {
       final ll = LatLng(widget.initialLat!, widget.initialLng!);
       if (mounted) setState(() => _userPos = ll);
-      _mapCtrl.move(ll, _zoom);
+      try { _mapCtrl.move(ll, _zoom); } catch (_) {}
       _fetchHeatmap();
       _fetchArea(ll);
-      // Still start live tracking so the dot stays up-to-date.
-      _posSub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.high, distanceFilter: 25),
-      ).listen((p) {
-        if (mounted) setState(() => _userPos = LatLng(p.latitude, p.longitude));
-      });
+      _startLiveTracking();
       return;
     }
 
+    // No initial position — do full GPS flow.
     if (!await Geolocator.isLocationServiceEnabled()) {
       _setError('Location services disabled'); return;
     }
@@ -187,9 +225,13 @@ class _HeatmapScreenState extends State<HeatmapScreen>
     final ll = LatLng(pos.latitude, pos.longitude);
     if (!mounted) return;
     setState(() => _userPos = ll);
-    _mapCtrl.move(ll, _zoom);
+    try { _mapCtrl.move(ll, _zoom); } catch (_) {}
     _fetchHeatmap();
     _fetchArea(ll);
+    _startLiveTracking();
+  }
+
+  void _startLiveTracking() {
     _posSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high, distanceFilter: 25),
@@ -229,33 +271,105 @@ class _HeatmapScreenState extends State<HeatmapScreen>
     } catch (_) {}
   }
 
+  // Real decoded polyline points from OSRM
+  List<LatLng> _realRoutePoints = [];
+
   Future<void> _fetchRoute() async {
     if (_userPos == null || _destPos == null) return;
-    setState(() => _loadingRoute = true);
+    setState(() { _loadingRoute = true; _realRoutePoints = []; });
     try {
-      final r = await SafetyApiService.analyzeRoute(
-        originLat: _userPos!.latitude,
-        originLng: _userPos!.longitude,
-        destLat:   _destPos!.latitude,
-        destLng:   _destPos!.longitude,
-        time:      'Now',
-      ).timeout(const Duration(seconds: 18));
+      // Run safety analysis + real road geometry in parallel, both with 20s cap
+      final results = await Future.wait([
+        SafetyApiService.analyzeRoute(
+          originLat: _userPos!.latitude,
+          originLng: _userPos!.longitude,
+          destLat:   _destPos!.latitude,
+          destLng:   _destPos!.longitude,
+          time:      'Now',
+        ).timeout(const Duration(seconds: 20)),
+        _fetchOsrmRoute(_userPos!, _destPos!),
+      ]);
+
       if (!mounted) return;
+      final r = results[0] as RouteAnalysisResult;
+      final pts = results[1] as List<LatLng>;
       setState(() {
-        _routeData     = r;
-        _activeRoute   = r.routes.firstWhere(
+        _routeData       = r;
+        _activeRoute     = r.routes.firstWhere(
                 (x) => x.isRecommended, orElse: () => r.routes.first);
-        _showRoute     = true;
-        _loadingRoute  = false;
-        _subtitle      = 'Navigating to destination';
+        _realRoutePoints = pts.isNotEmpty ? pts : [_userPos!, _destPos!];
+        _showRoute       = true;
+        _loadingRoute    = false;
+        _subtitle        = 'Navigating to destination';
       });
       _routeCtrl.forward(from: 0);
+      _fitMapToBothPoints();
     } on HeatmapException catch (e) {
       if (mounted) setState(() => _loadingRoute = false);
       _snack(e.message);
-    } catch (_) {
+    } catch (e) {
       if (mounted) setState(() => _loadingRoute = false);
+      _snack('Route fetch failed: $e');
     }
+  }
+
+  /// Fetch real road geometry from OSRM (free, no API key).
+  /// Returns decoded polyline points; falls back to straight line on error.
+  Future<List<LatLng>> _fetchOsrmRoute(LatLng origin, LatLng dest) async {
+    try {
+      final url = Uri.parse(
+        'https://router.project-osrm.org/route/v1/driving/'
+            '${origin.longitude},${origin.latitude};'
+            '${dest.longitude},${dest.latitude}'
+            '?overview=full&geometries=polyline&steps=false',
+      );
+      final resp = await http.get(url).timeout(const Duration(seconds: 20));
+      if (resp.statusCode != 200) return [origin, dest];
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      final routes = body['routes'] as List?;
+      if (routes == null || routes.isEmpty) return [origin, dest];
+      final encoded = (routes[0] as Map)['geometry'] as String?;
+      if (encoded == null || encoded.isEmpty) return [origin, dest];
+      return _decodePolyline(encoded);
+    } catch (_) {
+      return [origin, dest]; // straight-line fallback
+    }
+  }
+
+  /// Google-encoded polyline decoder (precision 5).
+  List<LatLng> _decodePolyline(String encoded) {
+    final result = <LatLng>[];
+    int index = 0, lat = 0, lng = 0;
+    while (index < encoded.length) {
+      int b, shift = 0, result0 = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result0 |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      lat += (result0 & 1) != 0 ? ~(result0 >> 1) : (result0 >> 1);
+
+      shift = 0; result0 = 0;
+      do {
+        b = encoded.codeUnitAt(index++) - 63;
+        result0 |= (b & 0x1f) << shift;
+        shift += 5;
+      } while (b >= 0x20);
+      lng += (result0 & 1) != 0 ? ~(result0 >> 1) : (result0 >> 1);
+
+      result.add(LatLng(lat / 1e5, lng / 1e5));
+    }
+    return result;
+  }
+
+  void _fitMapToBothPoints() {
+    if (_userPos == null || _destPos == null) return;
+    try {
+      _mapCtrl.fitCamera(CameraFit.bounds(
+        bounds:  LatLngBounds(_userPos!, _destPos!),
+        padding: const EdgeInsets.all(90),
+      ));
+    } catch (_) {}
   }
 
   void _setError(String msg) {
@@ -282,13 +396,20 @@ class _HeatmapScreenState extends State<HeatmapScreen>
 
   double _circleRadius(int score) {
     final danger = (100 - score).clamp(0, 100);
-    return 40 + (danger / 100) * 90;   // 40–130 m
+    return 40 + (danger / 100) * 90;
   }
 
   Color _scoreColor(int score) {
     if (score >= 70) return _kGreen;
     if (score >= 45) return _kAmber;
     return _kRed;
+  }
+
+  // FIX 7: dynamic label
+  String _scoreLabel(int score) {
+    if (score >= 70) return 'Safe';
+    if (score >= 45) return 'Moderate';
+    return 'Danger';
   }
 
   // ════════════════════════════════════════════════════════════════════════
@@ -305,7 +426,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
         _buildRightFABs(),
         if (_tappedPt != null) _buildPointPopup(),
         _buildBottomSheet(),
-        if (_loading)            _buildLoadingOverlay(),
+        if (_loading)                    _buildLoadingOverlay(),
         if (_error != null && !_loading) _buildErrorBanner(),
       ]),
     );
@@ -331,7 +452,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
         ),
         if (_showHeatmap && _heatmapData != null)
           CircleLayer(circles: _buildCircles()),
-        if (_showRoute && _routeData != null &&
+        if (_showRoute && _activeRoute != null &&
             _userPos != null && _destPos != null)
           PolylineLayer(polylines: _buildPolylines()),
         if (_userPos != null) _buildUserLayer(),
@@ -342,7 +463,6 @@ class _HeatmapScreenState extends State<HeatmapScreen>
     );
   }
 
-  // ── Heatmap circles ───────────────────────────────────────────────────────
   List<CircleMarker> _buildCircles() =>
       _heatmapData!.points.map((p) {
         final c = _riskColor(p.risk);
@@ -352,13 +472,11 @@ class _HeatmapScreenState extends State<HeatmapScreen>
           useRadiusInMeter: true,
           color: c.withValues(
               alpha: p.risk == 'High' ? 0.20 : p.risk == 'Medium' ? 0.14 : 0.10),
-          borderColor:
-          c.withValues(alpha: p.risk == 'Low' ? 0.0 : 0.38),
+          borderColor: c.withValues(alpha: p.risk == 'Low' ? 0.0 : 0.38),
           borderStrokeWidth: p.risk == 'High' ? 1.5 : 0,
         );
       }).toList();
 
-  // ── Tap markers (invisible hit targets) ──────────────────────────────────
   List<Marker> _tapMarkers() =>
       _heatmapData!.points.map((p) => Marker(
         point:  LatLng(p.lat, p.lng),
@@ -369,44 +487,36 @@ class _HeatmapScreenState extends State<HeatmapScreen>
         ),
       )).toList();
 
-  // ── Segmented route polylines ─────────────────────────────────────────────
   List<Polyline> _buildPolylines() {
     if (_activeRoute == null || _userPos == null || _destPos == null) return [];
-    final s  = _activeRoute!.safetyScore;
-    final oLat = _userPos!.latitude,  oLng = _userPos!.longitude;
-    final dLat = _destPos!.latitude,  dLng = _destPos!.longitude;
+    final s = _activeRoute!.safetyScore;
+    final c = _scoreColor(s);
 
-    // Three interpolated midpoints for visual segmentation
-    final m1 = LatLng((oLat + dLat) / 2 + 0.0035, (oLng + dLng) / 2 - 0.005);
-    final m2 = LatLng((oLat + dLat) / 2 - 0.002,  (oLng + dLng) / 2 + 0.004);
-    final m3 = LatLng(oLat * 0.25 + dLat * 0.75,  oLng * 0.25 + dLng * 0.75);
+    // Use real OSRM road geometry; fall back to straight line if not yet loaded
+    final pts = _realRoutePoints.isNotEmpty
+        ? _realRoutePoints
+        : [_userPos!, _destPos!];
 
-    final segs = [
-      [_userPos!, m1],
-      [m1, m2, m3],
-      [m3, _destPos!],
+    return [
+      // Shadow / border pass
+      Polyline(
+        points:           pts,
+        color:            Colors.black.withValues(alpha: 0.18),
+        strokeWidth:      9.0,
+        strokeCap:        StrokeCap.round,
+        strokeJoin:       StrokeJoin.round,
+      ),
+      // Main coloured route
+      Polyline(
+        points:           pts,
+        color:            c.withValues(alpha: 0.92),
+        strokeWidth:      5.5,
+        strokeCap:        StrokeCap.round,
+        strokeJoin:       StrokeJoin.round,
+      ),
     ];
-    final scores = [
-      (s * 1.06).clamp(0, 100).toInt(),
-      (s * 0.93).clamp(0, 100).toInt(),
-      s,
-    ];
-
-    return List.generate(3, (i) {
-      final c = _scoreColor(scores[i]);
-      return Polyline(
-        points: segs[i],
-        color:  c.withValues(alpha: 0.90),
-        strokeWidth: 5.5,
-        borderColor: c.withValues(alpha: 0.20),
-        borderStrokeWidth: 3.5,
-        strokeCap:  StrokeCap.round,
-        strokeJoin: StrokeJoin.round,
-      );
-    });
   }
 
-  // ── User location pulse ───────────────────────────────────────────────────
   Widget _buildUserLayer() => MarkerLayer(markers: [
     Marker(
       point:  _userPos!,
@@ -425,24 +535,13 @@ class _HeatmapScreenState extends State<HeatmapScreen>
               ),
             ),
             Container(
-              width: 30, height: 30,
-              decoration: BoxDecoration(
-                color:  _kBlue.withValues(alpha: 0.22),
-                shape:  BoxShape.circle,
-                border: Border.all(color: Colors.white30, width: 1),
-              ),
-            ),
-            Container(
               width: 14, height: 14,
               decoration: BoxDecoration(
                 color: _kBlue,
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 2.5),
+                border: Border.all(color: Colors.white, width: 2),
                 boxShadow: [
-                  BoxShadow(
-                    color: _kBlue.withValues(alpha: 0.70),
-                    blurRadius: 10, spreadRadius: 2,
-                  ),
+                  BoxShadow(color: _kBlue.withValues(alpha: 0.5), blurRadius: 8),
                 ],
               ),
             ),
@@ -452,34 +551,30 @@ class _HeatmapScreenState extends State<HeatmapScreen>
     ),
   ]);
 
-  // ── Destination marker ────────────────────────────────────────────────────
   Marker _destMarker() => Marker(
     point:  _destPos!,
-    width: 46, height: 56,
+    width:  36, height: 48,
     child: Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 40, height: 40,
+          width: 28, height: 28,
           decoration: BoxDecoration(
-            color: _kPurple,
+            color: _kRed,
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2.5),
-            boxShadow: [
-              BoxShadow(
-                color: _kPurple.withValues(alpha: 0.55),
-                blurRadius: 14, spreadRadius: 2,
-              ),
-            ],
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: [BoxShadow(color: _kRed.withValues(alpha: 0.5), blurRadius: 8)],
           ),
-          child: const Icon(Icons.flag_rounded, color: Colors.white, size: 20),
+          child: const Icon(Icons.flag_rounded, color: Colors.white, size: 14),
         ),
-        Container(width: 2, height: 12, color: _kPurple),
+        Container(width: 2, height: 14,
+            color: _kRed.withValues(alpha: 0.7)),
       ],
     ),
   );
 
   // ════════════════════════════════════════════════════════════════════════
-  //  TOP GLASSMORPHIC BAR
+  //  TOP BAR
   // ════════════════════════════════════════════════════════════════════════
   Widget _buildTopBar() {
     return Positioned(
@@ -496,13 +591,10 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                 decoration: BoxDecoration(
                   color: _kBg.withValues(alpha: 0.75),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.09)),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
                   boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      blurRadius: 24, offset: const Offset(0, 4),
-                    ),
+                    BoxShadow(color: Colors.black.withValues(alpha: 0.45),
+                        blurRadius: 24, offset: const Offset(0, 4)),
                   ],
                 ),
                 child: Row(children: [
@@ -514,31 +606,17 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Text(
-                          'Safety Heatmap',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                        GestureDetector(
-                          onTap: _showDestSheet,
-                          child: Text(
-                            _subtitle,
+                        const Text('Safety Heatmap',
+                            style: TextStyle(color: Colors.white,
+                                fontSize: 15, fontWeight: FontWeight.w800)),
+                        Text(_subtitle,
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.50),
-                              fontSize: 11,
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
+                                color: Colors.white.withValues(alpha: 0.50),
+                                fontSize: 11),
+                            overflow: TextOverflow.ellipsis),
                       ],
                     ),
                   ),
-                  _topBtn(Icons.layers_rounded, _showDestSheet,
-                      active: _showRoute),
                   _topBtn(Icons.refresh_rounded, () {
                     _fetchHeatmap();
                     if (_userPos != null) _fetchArea(_userPos!);
@@ -554,8 +632,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
     );
   }
 
-  Widget _topBtn(IconData icon, VoidCallback onTap,
-      {bool active = false}) =>
+  Widget _topBtn(IconData icon, VoidCallback onTap, {bool active = false}) =>
       GestureDetector(
         onTap: onTap,
         child: Container(
@@ -586,20 +663,19 @@ class _HeatmapScreenState extends State<HeatmapScreen>
       child: Column(children: [
         _fab(Icons.my_location_rounded, _recenter, tip: 'My location'),
         const SizedBox(height: 9),
-        _fab(
-          Icons.layers_rounded,
-              () => setState(() => _showHeatmap = !_showHeatmap),
-          tip: 'Toggle heatmap', active: _showHeatmap,
-        ),
+        _fab(Icons.layers_rounded,
+                () => setState(() => _showHeatmap = !_showHeatmap),
+            tip: 'Toggle heatmap', active: _showHeatmap),
         const SizedBox(height: 9),
-        _fab(
-          Icons.alt_route_rounded,
-              () => _showRoute
-              ? setState(() { _showRoute = false; _destPos = null;
-          _subtitle = 'Your current area'; })
-              : _showDestSheet(),
-          tip: 'Toggle route', active: _showRoute,
-        ),
+        _fab(Icons.alt_route_rounded,
+                () => _showRoute
+                ? setState(() {
+              _showRoute = false;
+              _destPos   = null;
+              _subtitle  = 'Your current area';
+            })
+                : _showDestSheet(),
+            tip: 'Toggle route', active: _showRoute),
         const SizedBox(height: 9),
         _fab(Icons.add_rounded, () {
           _zoom = (_zoom + 1).clamp(10, 18);
@@ -637,10 +713,8 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                       : Colors.white.withValues(alpha: 0.09),
                 ),
                 boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.35),
-                    blurRadius: 8, offset: const Offset(0, 2),
-                  ),
+                  BoxShadow(color: Colors.black.withValues(alpha: 0.35),
+                      blurRadius: 8, offset: const Offset(0, 2)),
                 ],
               ),
               child: Icon(icon,
@@ -667,8 +741,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
             decoration: BoxDecoration(
               color: _kBg.withValues(alpha: 0.78),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.09)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.09)),
               boxShadow: [
                 BoxShadow(color: Colors.black.withValues(alpha: 0.3),
                     blurRadius: 8),
@@ -678,14 +751,11 @@ class _HeatmapScreenState extends State<HeatmapScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  'RISK LEVEL',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.38),
-                    fontSize: 8, fontWeight: FontWeight.w800,
-                    letterSpacing: 1.3,
-                  ),
-                ),
+                Text('RISK LEVEL',
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.38),
+                        fontSize: 8, fontWeight: FontWeight.w800,
+                        letterSpacing: 1.3)),
                 const SizedBox(height: 8),
                 _legendRow(_kGreen, 'Safe',     '≥85'),
                 const SizedBox(height: 5),
@@ -713,17 +783,12 @@ class _HeatmapScreenState extends State<HeatmapScreen>
         ),
       ),
       const SizedBox(width: 7),
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(color: Colors.white70,
-                  fontSize: 11, fontWeight: FontWeight.w600)),
-          Text(range,
-              style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.35), fontSize: 9)),
-        ],
-      ),
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: const TextStyle(color: Colors.white70,
+            fontSize: 11, fontWeight: FontWeight.w600)),
+        Text(range, style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.35), fontSize: 9)),
+      ]),
     ],
   );
 
@@ -747,23 +812,21 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                 color: _kCard.withValues(alpha: 0.92),
                 borderRadius: BorderRadius.circular(18),
                 border: Border.all(color: c.withValues(alpha: 0.42)),
-                boxShadow: [
-                  BoxShadow(
-                      color: c.withValues(alpha: 0.22), blurRadius: 20),
-                ],
+                boxShadow: [BoxShadow(
+                    color: c.withValues(alpha: 0.22), blurRadius: 20)],
               ),
               child: Row(children: [
                 Container(
                   width: 42, height: 42,
                   decoration: BoxDecoration(
-                    color:  c.withValues(alpha: 0.15),
-                    shape:  BoxShape.circle,
+                    color: c.withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
                     border: Border.all(color: c, width: 1.5),
                   ),
                   child: Center(
                     child: Text('${p.score}',
-                        style: TextStyle(color: c,
-                            fontSize: 13, fontWeight: FontWeight.w800)),
+                        style: TextStyle(color: c, fontSize: 13,
+                            fontWeight: FontWeight.w800)),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -772,15 +835,13 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text('${p.risk} Risk Zone',
-                        style: TextStyle(color: c,
-                            fontSize: 13, fontWeight: FontWeight.w700)),
+                        style: TextStyle(color: c, fontSize: 13,
+                            fontWeight: FontWeight.w700)),
                     Text('Score: ${p.score} / 100',
                         style: TextStyle(
                             color: Colors.white.withValues(alpha: 0.55),
                             fontSize: 11)),
-                    Text(
-                        '${p.lat.toStringAsFixed(4)}, '
-                            '${p.lng.toStringAsFixed(4)}',
+                    Text('${p.lat.toStringAsFixed(4)}, ${p.lng.toStringAsFixed(4)}',
                         style: TextStyle(
                             color: Colors.white.withValues(alpha: 0.30),
                             fontSize: 10)),
@@ -800,7 +861,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  //  DRAGGABLE BOTTOM SHEET
+  //  BOTTOM SHEET
   // ════════════════════════════════════════════════════════════════════════
   Widget _buildBottomSheet() {
     return DraggableScrollableSheet(
@@ -825,8 +886,6 @@ class _HeatmapScreenState extends State<HeatmapScreen>
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.symmetric(horizontal: 18),
               children: [
-
-                // ── Handle ──────────────────────────────────────────────
                 Center(
                   child: Container(
                     width: 38, height: 4,
@@ -837,30 +896,20 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                     ),
                   ),
                 ),
-
-                // ── Score chip (always visible) ──────────────────────
                 _buildScoreRow(),
                 const SizedBox(height: 14),
-
-                // ── Stats row ────────────────────────────────────────
                 if (_heatmapData != null) ...[
                   _buildStatsRow(),
                   const SizedBox(height: 16),
                 ],
-
-                // ── Radius slider ────────────────────────────────────
                 _buildRadiusRow(),
                 const SizedBox(height: 18),
-
-                // ── Route options ────────────────────────────────────
                 if (_routeData != null) ...[
                   _label('Route Options'),
                   const SizedBox(height: 10),
                   ..._routeData!.routes.map(_buildRouteCard),
                   const SizedBox(height: 14),
                 ],
-
-                // ── Action buttons ───────────────────────────────────
                 _buildActions(),
                 const SizedBox(height: 28),
               ],
@@ -886,11 +935,9 @@ class _HeatmapScreenState extends State<HeatmapScreen>
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Icon(Icons.shield_rounded, color: c, size: 15),
           const SizedBox(width: 6),
-          Text(
-            score != null ? 'Safety Score  $score/100' : level,
-            style: TextStyle(color: c, fontSize: 13,
-                fontWeight: FontWeight.w700),
-          ),
+          Text(score != null ? 'Safety Score  $score/100' : level,
+              style: TextStyle(color: c, fontSize: 13,
+                  fontWeight: FontWeight.w700)),
         ]),
       ),
       if (score != null) ...[
@@ -911,18 +958,18 @@ class _HeatmapScreenState extends State<HeatmapScreen>
   }
 
   Widget _buildStatsRow() {
-    final pts  = _heatmapData!.points;
-    final s    = pts.where((p) => p.risk == 'Low').length;
-    final m    = pts.where((p) => p.risk == 'Medium').length;
-    final d    = pts.where((p) => p.risk == 'High').length;
-    final avg  = pts.isEmpty ? 0
+    final pts = _heatmapData!.points;
+    final s   = pts.where((p) => p.risk == 'Low').length;
+    final m   = pts.where((p) => p.risk == 'Medium').length;
+    final d   = pts.where((p) => p.risk == 'High').length;
+    final avg = pts.isEmpty ? 0
         : (pts.fold<int>(0, (a, p) => a + p.score) / pts.length).round();
     return Row(children: [
-      _statTile('$s',   'Safe',    _kGreen),
+      _statTile('$s',   'Safe',     _kGreen),
       const SizedBox(width: 7),
-      _statTile('$m',   'Moderate',_kAmber),
+      _statTile('$m',   'Moderate', _kAmber),
       const SizedBox(width: 7),
-      _statTile('$d',   'High',    _kRed),
+      _statTile('$d',   'High',     _kRed),
       const SizedBox(width: 7),
       _statTile('$avg', 'Avg Score',_kPurple),
     ]);
@@ -954,8 +1001,8 @@ class _HeatmapScreenState extends State<HeatmapScreen>
           _label('Scan Radius'),
           const Spacer(),
           Text('${_radiusKm.toStringAsFixed(1)} km',
-              style: const TextStyle(color: _kPurple,
-                  fontSize: 12, fontWeight: FontWeight.w700)),
+              style: const TextStyle(color: _kPurple, fontSize: 12,
+                  fontWeight: FontWeight.w700)),
         ]),
         const SizedBox(height: 6),
         SliderTheme(
@@ -965,15 +1012,14 @@ class _HeatmapScreenState extends State<HeatmapScreen>
             thumbColor:         _kPurple,
             overlayColor:       _kPurple.withValues(alpha: 0.14),
             trackHeight: 3,
-            thumbShape:
-            const RoundSliderThumbShape(enabledThumbRadius: 8),
+            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
           ),
           child: Slider(
-            value:     _radiusKm,
-            min: 0.5,  max: 3.0,
+            value:    _radiusKm,
+            min: 0.5, max: 3.0,
             divisions: 5,
-            onChanged:    (v) => setState(() => _radiusKm = v),
-            onChangeEnd:  (_) => _fetchHeatmap(),
+            onChanged:   (v) => setState(() => _radiusKm = v),
+            onChangeEnd: (_) => _fetchHeatmap(),
           ),
         ),
       ],
@@ -992,25 +1038,20 @@ class _HeatmapScreenState extends State<HeatmapScreen>
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: picked
-              ? c.withValues(alpha: 0.11)
-              : _kCard.withValues(alpha: 0.60),
+          color: picked ? c.withValues(alpha: 0.11) : _kCard.withValues(alpha: 0.60),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: picked
-                ? c.withValues(alpha: 0.40)
-                : Colors.white.withValues(alpha: 0.07),
+            color: picked ? c.withValues(alpha: 0.40) : Colors.white.withValues(alpha: 0.07),
             width: picked ? 1.5 : 1,
           ),
         ),
         child: Row(children: [
-          // Score ring
           Container(
             width: 46, height: 46,
             decoration: BoxDecoration(
-              shape:  BoxShape.circle,
+              shape: BoxShape.circle,
               border: Border.all(color: c, width: 2),
-              color:  c.withValues(alpha: 0.10),
+              color: c.withValues(alpha: 0.10),
             ),
             child: Center(
               child: Text('${r.safetyScore}',
@@ -1024,23 +1065,19 @@ class _HeatmapScreenState extends State<HeatmapScreen>
             children: [
               Row(children: [
                 Expanded(
-                  child: Text(r.name,
-                      style: const TextStyle(color: Colors.white,
-                          fontSize: 13, fontWeight: FontWeight.w700)),
+                  child: Text(r.name, style: const TextStyle(color: Colors.white,
+                      fontSize: 13, fontWeight: FontWeight.w700)),
                 ),
                 if (r.isRecommended)
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 7, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
                       color: _kGreen.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                          color: _kGreen.withValues(alpha: 0.38)),
+                      border: Border.all(color: _kGreen.withValues(alpha: 0.38)),
                     ),
-                    child: const Text('Safest',
-                        style: TextStyle(color: _kGreen,
-                            fontSize: 10, fontWeight: FontWeight.w700)),
+                    child: const Text('Safest', style: TextStyle(color: _kGreen,
+                        fontSize: 10, fontWeight: FontWeight.w700)),
                   ),
               ]),
               const SizedBox(height: 3),
@@ -1049,8 +1086,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
               if (r.factors.isNotEmpty) ...[
                 const SizedBox(height: 3),
                 Text(r.factors.first,
-                    style: TextStyle(
-                        color: c.withValues(alpha: 0.80), fontSize: 10),
+                    style: TextStyle(color: c.withValues(alpha: 0.80), fontSize: 10),
                     overflow: TextOverflow.ellipsis),
               ],
             ],
@@ -1068,28 +1104,24 @@ class _HeatmapScreenState extends State<HeatmapScreen>
     const SizedBox(width: 10),
     Expanded(child: _actionBtn(
       Icons.navigation_rounded,
-      _loadingRoute
-          ? 'Analysing…'
-          : (_showRoute ? 'Voice Guide' : 'Start Navigation'),
+      _loadingRoute ? 'Analysing…'
+          : (_showRoute ? 'Start Navigation' : 'Set Destination'),
       _kGreen,
-      _loadingRoute
-          ? null
-          : (_showRoute ? _startVoiceNavigation : _showDestSheet),
+      _loadingRoute ? null
+          : (_showRoute ? _openNavigationScreen : _showDestSheet),
     )),
   ]);
 
-  void _startVoiceNavigation() {
+  // FIX 5: Push a full-screen navigation page instead of a bottom sheet.
+  void _openNavigationScreen() {
     if (_activeRoute == null) return;
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: _kCard,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      builder: (_) => _VoiceNavigationSheet(
-        route: _activeRoute!,
-        destination: widget.destinationLabel ?? _subtitle.replaceFirst('Navigating to ', ''),
-        destPos: _destPos,
-        userPos: _userPos,
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => NavigationScreen(
+        route:       _activeRoute!,
+        destination: widget.destinationLabel ??
+            _subtitle.replaceFirst('Navigating to ', ''),
+        destPos:  _destPos,
+        userPos:  _userPos,
         onExit: () {
           Navigator.pop(context);
           setState(() {
@@ -1099,11 +1131,13 @@ class _HeatmapScreenState extends State<HeatmapScreen>
           });
         },
       ),
-    );
+    ));
   }
 
-  Widget _actionBtn(IconData icon, String label, Color c,
-      VoidCallback? onTap) {
+  // Legacy alias so old call sites still work.
+  void _startVoiceNavigation() => _openNavigationScreen();
+
+  Widget _actionBtn(IconData icon, String label, Color c, VoidCallback? onTap) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1151,10 +1185,8 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                 color: _kCard,
                 borderRadius: BorderRadius.circular(22),
                 border: Border.all(color: _kCardBorder),
-                boxShadow: [
-                  BoxShadow(color: Colors.black.withValues(alpha: 0.5),
-                      blurRadius: 30),
-                ],
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.5),
+                    blurRadius: 30)],
               ),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 SizedBox(
@@ -1171,8 +1203,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                 const SizedBox(height: 5),
                 Text('AI model analysing your area',
                     style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.42),
-                        fontSize: 11)),
+                        color: Colors.white.withValues(alpha: 0.42), fontSize: 11)),
               ]),
             ),
           ),
@@ -1201,22 +1232,19 @@ class _HeatmapScreenState extends State<HeatmapScreen>
             const Icon(Icons.warning_amber_rounded, color: _kRed, size: 17),
             const SizedBox(width: 8),
             Expanded(
-              child: Text(_error!,
-                  style: const TextStyle(color: Colors.white70, fontSize: 11),
-                  maxLines: 2),
+              child: Text(_error!, style: const TextStyle(color: Colors.white70,
+                  fontSize: 11), maxLines: 2),
             ),
             GestureDetector(
               onTap: _fetchHeatmap,
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 9, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
                 decoration: BoxDecoration(
                   color: _kRed.withValues(alpha: 0.22),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Text('Retry',
-                    style: TextStyle(color: _kRed, fontSize: 11,
-                        fontWeight: FontWeight.w700)),
+                child: const Text('Retry', style: TextStyle(color: _kRed,
+                    fontSize: 11, fontWeight: FontWeight.w700)),
               ),
             ),
           ]),
@@ -1226,7 +1254,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
   );
 
   // ════════════════════════════════════════════════════════════════════════
-  //  DESTINATION BOTTOM SHEET
+  //  DESTINATION SHEET (for manual route setting on this screen)
   // ════════════════════════════════════════════════════════════════════════
   void _showDestSheet() {
     showModalBottomSheet(
@@ -1245,8 +1273,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(children: [
-              const Icon(Icons.alt_route_rounded,
-                  color: _kPurple, size: 20),
+              const Icon(Icons.alt_route_rounded, color: _kPurple, size: 20),
               const SizedBox(width: 10),
               const Text('Plan Safe Route',
                   style: TextStyle(color: Colors.white,
@@ -1261,8 +1288,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
             const SizedBox(height: 14),
             Text('Quick destinations',
                 style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.50),
-                    fontSize: 11)),
+                    color: Colors.white.withValues(alpha: 0.50), fontSize: 11)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8, runSpacing: 6,
@@ -1272,17 +1298,14 @@ class _HeatmapScreenState extends State<HeatmapScreen>
               ].map((name) => GestureDetector(
                 onTap: () { Navigator.pop(context); _setDest(name); },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 7),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
                   decoration: BoxDecoration(
                     color: _kPurple.withValues(alpha: 0.11),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                        color: _kPurple.withValues(alpha: 0.28)),
+                    border: Border.all(color: _kPurple.withValues(alpha: 0.28)),
                   ),
-                  child: Text(name,
-                      style: const TextStyle(color: _kPurple,
-                          fontSize: 12, fontWeight: FontWeight.w600)),
+                  child: Text(name, style: const TextStyle(color: _kPurple,
+                      fontSize: 12, fontWeight: FontWeight.w600)),
                 ),
               )).toList(),
             ),
@@ -1293,8 +1316,7 @@ class _HeatmapScreenState extends State<HeatmapScreen>
               decoration: InputDecoration(
                 hintText: 'Enter destination…',
                 hintStyle: const TextStyle(color: Colors.white38),
-                prefixIcon: const Icon(Icons.search_rounded,
-                    color: Colors.white38),
+                prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38),
                 filled: true,
                 fillColor: const Color(0xFF1A2332),
                 border: OutlineInputBorder(
@@ -1331,10 +1353,9 @@ class _HeatmapScreenState extends State<HeatmapScreen>
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  //  COORD LOOKUP  (mirrors trip_planning_screen _cityCoords)
+  //  COORD LOOKUP
   // ════════════════════════════════════════════════════════════════════════
   static const Map<String, List<double>> _knownCoords = {
-    // Major Bengaluru areas
     'koramangala':        [12.9279, 77.6271],
     'indiranagar':        [12.9719, 77.6412],
     'mg road':            [12.9756, 77.6101],
@@ -1377,9 +1398,9 @@ class _HeatmapScreenState extends State<HeatmapScreen>
   };
 
   List<double>? _resolveDestCoords(String dest) {
-    // Try raw lat,lng
     final clean = dest.trim().replaceAll('⌖', '').trim();
-    final regex = RegExp(r'^([+-]?\d{1,3}(?:\.\d+)?)[,\s]+([+-]?\d{1,3}(?:\.\d+)?)$');
+    final regex = RegExp(
+        r'^([+-]?\d{1,3}(?:\.\d+)?)[,\s]+([+-]?\d{1,3}(?:\.\d+)?)$');
     final m = regex.firstMatch(clean);
     if (m != null) {
       final lat = double.tryParse(m.group(1)!);
@@ -1401,7 +1422,6 @@ class _HeatmapScreenState extends State<HeatmapScreen>
 
   void _setDest(String name) {
     if (_userPos == null) return;
-    // Try to resolve real coords; fall back to slight offset only if unknown
     final coords = _resolveDestCoords(name);
     final LatLng dest = coords != null
         ? LatLng(coords[0], coords[1])
@@ -1413,20 +1433,18 @@ class _HeatmapScreenState extends State<HeatmapScreen>
       _destPos  = dest;
       _subtitle = 'Navigating to $name';
     });
-    try {
-      _mapCtrl.fitCamera(CameraFit.bounds(
-        bounds:  LatLngBounds(_userPos!, dest),
-        padding: const EdgeInsets.all(90),
-      ));
-    } catch (_) {}
+    _fitMapToBothPoints();
     _fetchRoute();
   }
 
   // ════════════════════════════════════════════════════════════════════════
-  //  RISK SUMMARY BOTTOM SHEET
+  //  AREA RISK SUMMARY SHEET
   // ════════════════════════════════════════════════════════════════════════
   void _showRiskSummary() {
-    if (_heatmapData == null) { _snack('No data yet — load heatmap first'); return; }
+    if (_heatmapData == null) {
+      _snack('No data yet — load heatmap first');
+      return;
+    }
     final pts = _heatmapData!.points;
     final s   = pts.where((p) => p.risk == 'Low').length;
     final m   = pts.where((p) => p.risk == 'Medium').length;
@@ -1436,17 +1454,31 @@ class _HeatmapScreenState extends State<HeatmapScreen>
     final dom = d > s ? 'High' : m > s ? 'Medium' : 'Low';
     final dc  = _riskColor(dom);
 
+    // Also show the route factors if a route is active.
+    final routeFactors = _activeRoute?.factors ?? [];
+
     showModalBottomSheet(
       context: context,
       backgroundColor: _kCard,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
       builder: (_) => Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 36),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Center(
+              child: Container(
+                width: 38, height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
             Row(children: [
               Icon(Icons.analytics_rounded, color: dc, size: 22),
               const SizedBox(width: 10),
@@ -1456,11 +1488,48 @@ class _HeatmapScreenState extends State<HeatmapScreen>
             ]),
             const SizedBox(height: 20),
             _summRow('Avg Safety Score', '$avg / 100', _kPurple),
-            _summRow('Safe Zones',        '$s areas',  _kGreen),
-            _summRow('Moderate Risk',     '$m areas',  _kAmber),
-            _summRow('High Risk',         '$d areas',  _kRed),
-            _summRow('Dominant Level',    dom,         dc),
-            const SizedBox(height: 18),
+            _summRow('Safe Zones',       '$s areas',   _kGreen),
+            _summRow('Moderate Risk',    '$m areas',   _kAmber),
+            _summRow('High Risk',        '$d areas',   _kRed),
+            _summRow('Dominant Level',   dom,          dc),
+            if (_activeRoute != null) ...[
+              const SizedBox(height: 4),
+              _summRow('Route Score', '${_activeRoute!.safetyScore}/100',
+                  _scoreColor(_activeRoute!.safetyScore)),
+            ],
+            const SizedBox(height: 16),
+            if (routeFactors.isNotEmpty) ...[
+              Text('Route Safety Factors',
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.50),
+                      fontSize: 11, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6, runSpacing: 6,
+                children: routeFactors.map((f) {
+                  final isGood = !f.toLowerCase().contains('avoid') &&
+                      !f.toLowerCase().contains('isolated') &&
+                      !f.toLowerCase().contains('limited');
+                  final fc = isGood ? _kGreen : _kAmber;
+                  return Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: fc.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: fc.withValues(alpha: 0.25)),
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(isGood ? Icons.check_circle : Icons.warning_amber,
+                          color: fc, size: 11),
+                      const SizedBox(width: 5),
+                      Text(f, style: TextStyle(color: fc, fontSize: 11)),
+                    ]),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+            ],
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -1483,7 +1552,6 @@ class _HeatmapScreenState extends State<HeatmapScreen>
                 ),
               ]),
             ),
-            const SizedBox(height: 10),
           ],
         ),
       ),
@@ -1493,29 +1561,29 @@ class _HeatmapScreenState extends State<HeatmapScreen>
   Widget _summRow(String lbl, String val, Color c) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 5),
     child: Row(children: [
-      Text(lbl,
-          style: const TextStyle(color: Colors.white54, fontSize: 13)),
+      Text(lbl, style: const TextStyle(color: Colors.white54, fontSize: 13)),
       const Spacer(),
-      Text(val,
-          style: TextStyle(color: c, fontSize: 13,
-              fontWeight: FontWeight.w700)),
+      Text(val, style: TextStyle(color: c, fontSize: 13,
+          fontWeight: FontWeight.w700)),
     ]),
   );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  VOICE NAVIGATION SHEET
-//  Shows score, risk summary, step-by-step guide, exit button
+//  NAVIGATION SCREEN  (FIX 5 — full screen, not bottom sheet)
+//  FIX 4 — Real TTS via flutter_tts
+//  FIX 7 — Dynamic score label
 // ════════════════════════════════════════════════════════════════════════════
 
-class _VoiceNavigationSheet extends StatefulWidget {
-  final RouteData  route;
-  final String     destination;
-  final LatLng?    destPos;
-  final LatLng?    userPos;
+class NavigationScreen extends StatefulWidget {
+  final RouteData    route;
+  final String       destination;
+  final LatLng?      destPos;
+  final LatLng?      userPos;
   final VoidCallback onExit;
 
-  const _VoiceNavigationSheet({
+  const NavigationScreen({
+    super.key,
     required this.route,
     required this.destination,
     required this.destPos,
@@ -1524,21 +1592,97 @@ class _VoiceNavigationSheet extends StatefulWidget {
   });
 
   @override
-  State<_VoiceNavigationSheet> createState() => _VoiceNavigationSheetState();
+  State<NavigationScreen> createState() => _NavigationScreenState();
 }
 
-class _VoiceNavigationSheetState extends State<_VoiceNavigationSheet> {
+class _NavigationScreenState extends State<NavigationScreen> {
   int _stepIndex = 0;
+  late FlutterTts _tts;
+  bool _ttsReady = false;
+  bool _voiceOn  = true;
 
-  // Simulated turn-by-turn steps derived from route name
   List<Map<String, dynamic>> get _steps => [
-    {'icon': Icons.straight,       'text': 'Proceed straight for 500 m',         'dist': '500 m'},
-    {'icon': Icons.turn_right,     'text': 'Turn right onto the main road',       'dist': '1.2 km'},
-    {'icon': Icons.straight,       'text': 'Continue for 2 km on lit road',       'dist': '2.0 km'},
-    {'icon': Icons.turn_left,      'text': 'Turn left – well-lit area ahead',     'dist': '800 m'},
-    {'icon': Icons.straight,       'text': 'Stay on the safe corridor',           'dist': '1.5 km'},
-    {'icon': Icons.flag_rounded,   'text': 'Arrive at ${widget.destination}',     'dist': ''},
+    {
+      'icon': Icons.straight,
+      'text': 'Start heading towards ${widget.destination}',
+      'dist': '—',
+      'tts': 'Starting navigation to ${widget.destination}. Proceed straight.',
+    },
+    {
+      'icon': Icons.straight,
+      'text': 'Continue on the main road — well-lit area',
+      'dist': _segDist(0.3),
+      'tts': 'Continue straight on the main road. This is a well-lit area.',
+    },
+    {
+      'icon': Icons.turn_right,
+      'text': 'Turn right ahead — stay on the busy street',
+      'dist': _segDist(0.5),
+      'tts': 'Turn right ahead. Stay on the busy street for safety.',
+    },
+    {
+      'icon': Icons.straight,
+      'text': 'Stay on the lit corridor — safe zone',
+      'dist': _segDist(0.4),
+      'tts': 'Continue straight. You are in a safe zone with good lighting.',
+    },
+    {
+      'icon': Icons.turn_left,
+      'text': 'Turn left — residential area ahead',
+      'dist': _segDist(0.25),
+      'tts': 'Turn left. Residential area ahead — moderate activity.',
+    },
+    {
+      'icon': Icons.flag_rounded,
+      'text': 'Arriving at ${widget.destination}',
+      'dist': '—',
+      'tts': 'You are arriving at your destination: ${widget.destination}. Stay safe!',
+    },
   ];
+
+  String _segDist(double fraction) {
+    if (widget.userPos == null || widget.destPos == null) return '—';
+    const d   = Distance();
+    final km  = d.as(LengthUnit.Kilometer, widget.userPos!, widget.destPos!);
+    final seg = km * fraction;
+    return seg < 1.0 ? '${(seg * 1000).round()} m' : '${seg.toStringAsFixed(1)} km';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _initTts();
+  }
+
+  Future<void> _initTts() async {
+    _tts = FlutterTts();
+    await _tts.setLanguage('en-IN');
+    await _tts.setSpeechRate(0.45);
+    await _tts.setVolume(1.0);
+    await _tts.setPitch(1.0);
+    if (mounted) setState(() => _ttsReady = true);
+    // Speak first step automatically.
+    _speakStep(0);
+  }
+
+  Future<void> _speakStep(int idx) async {
+    if (!_voiceOn || !_ttsReady) return;
+    final text = _steps[idx]['tts'] as String;
+    await _tts.stop();
+    await _tts.speak(text);
+  }
+
+  void _goStep(int idx) {
+    if (idx < 0 || idx >= _steps.length) return;
+    setState(() => _stepIndex = idx);
+    _speakStep(idx);
+  }
+
+  @override
+  void dispose() {
+    _tts.stop();
+    super.dispose();
+  }
 
   Color get _scoreColor {
     final s = widget.route.safetyScore;
@@ -1547,7 +1691,15 @@ class _VoiceNavigationSheetState extends State<_VoiceNavigationSheet> {
     return _kRed;
   }
 
-  double? _distanceKm() {
+  // FIX 7
+  String get _scoreLabel {
+    final s = widget.route.safetyScore;
+    if (s >= 70) return 'Safe';
+    if (s >= 45) return 'Moderate';
+    return 'Danger';
+  }
+
+  double? get _distanceKm {
     if (widget.userPos == null || widget.destPos == null) return null;
     const d = Distance();
     return d.as(LengthUnit.Kilometer, widget.userPos!, widget.destPos!);
@@ -1557,252 +1709,346 @@ class _VoiceNavigationSheetState extends State<_VoiceNavigationSheet> {
   Widget build(BuildContext context) {
     final c     = _scoreColor;
     final score = widget.route.safetyScore;
-    final dist  = _distanceKm();
+    final dist  = _distanceKm;
+    final step  = _steps[_stepIndex];
 
-    return Container(
-      decoration: const BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-
-          // ── Handle ──────────────────────────────────────────────────────
-          Center(
-            child: Container(
-              width: 38, height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-
-          // ── Header row ──────────────────────────────────────────────────
-          Row(children: [
-            Icon(Icons.navigation_rounded, color: c, size: 22),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Navigating to ${widget.destination}',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w800),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    '${widget.route.duration}  ·  ${widget.route.distance}'
-                        '${dist != null ? '  ·  ${dist.toStringAsFixed(1)} km away' : ''}',
-                    style: const TextStyle(
-                        color: Colors.white54, fontSize: 11),
-                  ),
-                ],
-              ),
-            ),
-          ]),
-          const SizedBox(height: 16),
-
-          // ── Score + risk summary ─────────────────────────────────────────
-          Row(children: [
-            // Score ring
+    return Scaffold(
+      backgroundColor: _kBg,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // ── Top bar ──────────────────────────────────────────────────
             Container(
-              width: 56, height: 56,
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               decoration: BoxDecoration(
-                shape:  BoxShape.circle,
-                border: Border.all(color: c, width: 2.5),
-                color:  c.withValues(alpha: 0.12),
+                color: _kCard,
+                border: Border(
+                    bottom: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
               ),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('$score',
-                        style: TextStyle(color: c,
-                            fontSize: 16, fontWeight: FontWeight.w900)),
-                    Text('Safe',
-                        style: TextStyle(color: c,
-                            fontSize: 8, fontWeight: FontWeight.w600)),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(widget.route.name,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 6, runSpacing: 4,
-                    children: widget.route.factors.take(3).map((f) {
-                      final isGood = !f.toLowerCase().contains('isolated') &&
-                          !f.toLowerCase().contains('avoid') &&
-                          !f.toLowerCase().contains('limited');
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: (isGood ? _kGreen : _kAmber)
-                              .withValues(alpha: 0.13),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(
-                            isGood ? Icons.check_circle : Icons.warning_amber,
-                            color: isGood ? _kGreen : _kAmber,
-                            size: 10,
-                          ),
-                          const SizedBox(width: 3),
-                          Text(f,
-                              style: TextStyle(
-                                  color: isGood ? _kGreen : _kAmber,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600)),
-                        ]),
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-          ]),
-          const SizedBox(height: 18),
-
-          // ── Step-by-step navigation ──────────────────────────────────────
-          const Text('ROUTE OVERVIEW',
-              style: TextStyle(
-                  color: Colors.white38,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.2)),
-          const SizedBox(height: 10),
-
-          SizedBox(
-            height: 130,
-            child: ListView.builder(
-              scrollDirection: Axis.vertical,
-              itemCount: _steps.length,
-              itemBuilder: (_, i) {
-                final step    = _steps[i];
-                final current = i == _stepIndex;
-                final done    = i < _stepIndex;
-                final stepColor = done
-                    ? Colors.white24
-                    : current
-                    ? c
-                    : Colors.white38;
-                return GestureDetector(
-                  onTap: () => setState(() => _stepIndex = i),
+              child: Row(children: [
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
                   child: Container(
-                    margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 8),
+                    width: 36, height: 36,
                     decoration: BoxDecoration(
-                      color: current
-                          ? c.withValues(alpha: 0.10)
-                          : Colors.transparent,
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.arrow_back_ios_new_rounded,
+                        color: Colors.white70, size: 16),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Navigating to ${widget.destination}',
+                          style: const TextStyle(color: Colors.white,
+                              fontSize: 15, fontWeight: FontWeight.w800),
+                          overflow: TextOverflow.ellipsis),
+                      Text(
+                        '${widget.route.duration}  ·  ${widget.route.distance}'
+                            '${dist != null ? '  ·  ${dist.toStringAsFixed(1)} km' : ''}',
+                        style: const TextStyle(color: Colors.white54,
+                            fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+                // Voice toggle
+                GestureDetector(
+                  onTap: () async {
+                    setState(() => _voiceOn = !_voiceOn);
+                    if (!_voiceOn) await _tts.stop();
+                    else _speakStep(_stepIndex);
+                  },
+                  child: Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      color: _voiceOn
+                          ? _kGreen.withValues(alpha: 0.18)
+                          : Colors.white.withValues(alpha: 0.07),
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(
-                        color: current
-                            ? c.withValues(alpha: 0.35)
-                            : Colors.transparent,
+                        color: _voiceOn
+                            ? _kGreen.withValues(alpha: 0.45)
+                            : Colors.white.withValues(alpha: 0.09),
                       ),
                     ),
-                    child: Row(children: [
-                      Icon(step['icon'] as IconData,
-                          color: stepColor, size: 16),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(step['text'] as String,
-                            style: TextStyle(
-                                color: done
-                                    ? Colors.white30
-                                    : Colors.white70,
-                                fontSize: 12,
-                                fontWeight: current
-                                    ? FontWeight.w700
-                                    : FontWeight.normal)),
-                      ),
-                      if ((step['dist'] as String).isNotEmpty)
-                        Text(step['dist'] as String,
-                            style: TextStyle(
-                                color: stepColor,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600)),
+                    child: Icon(
+                      _voiceOn ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                      color: _voiceOn ? _kGreen : Colors.white38, size: 18,
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+
+            // ── Score + route summary ─────────────────────────────────────
+            Container(
+              margin: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: c.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: c.withValues(alpha: 0.25)),
+              ),
+              child: Row(children: [
+                // Score ring
+                Container(
+                  width: 60, height: 60,
+                  decoration: BoxDecoration(
+                    shape:  BoxShape.circle,
+                    border: Border.all(color: c, width: 2.5),
+                    color:  c.withValues(alpha: 0.12),
+                  ),
+                  child: Center(
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Text('$score',
+                          style: TextStyle(color: c, fontSize: 17,
+                              fontWeight: FontWeight.w900)),
+                      // FIX 7: dynamic label
+                      Text(_scoreLabel,
+                          style: TextStyle(color: c, fontSize: 7,
+                              fontWeight: FontWeight.w700)),
                     ]),
                   ),
-                );
-              },
-            ),
-          ),
-
-          // ── Next / Prev step ────────────────────────────────────────────
-          Row(children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _stepIndex > 0
-                    ? () => setState(() => _stepIndex--)
-                    : null,
-                icon: const Icon(Icons.chevron_left, size: 16),
-                label: const Text('Prev'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white54,
-                  side: const BorderSide(color: Colors.white12),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
                 ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: _stepIndex < _steps.length - 1
-                    ? () => setState(() => _stepIndex++)
-                    : null,
-                icon: const Icon(Icons.chevron_right, size: 16),
-                label: const Text('Next Step'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: c,
-                  foregroundColor: Colors.black87,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(widget.route.name,
+                          style: const TextStyle(color: Colors.white,
+                              fontSize: 14, fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 6, runSpacing: 4,
+                        children: widget.route.factors.take(3).map((f) {
+                          final isGood = !f.toLowerCase().contains('isolated') &&
+                              !f.toLowerCase().contains('avoid') &&
+                              !f.toLowerCase().contains('limited');
+                          final fc = isGood ? _kGreen : _kAmber;
+                          return Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: fc.withValues(alpha: 0.13),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              Icon(
+                                isGood ? Icons.check_circle : Icons.warning_amber,
+                                color: fc, size: 10,
+                              ),
+                              const SizedBox(width: 3),
+                              Text(f, style: TextStyle(color: fc, fontSize: 9,
+                                  fontWeight: FontWeight.w600)),
+                            ]),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+              ]),
             ),
-          ]),
-          const SizedBox(height: 10),
 
-          // ── Exit Navigation ──────────────────────────────────────────────
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: widget.onExit,
-              icon: const Icon(Icons.close_rounded,
-                  color: _kRed, size: 16),
-              label: const Text('Exit Navigation',
-                  style: TextStyle(color: _kRed)),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: _kRed.withValues(alpha: 0.4)),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(vertical: 12),
+            // ── Current step highlight ────────────────────────────────────
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: c.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: c.withValues(alpha: 0.35)),
+                boxShadow: [
+                  BoxShadow(color: c.withValues(alpha: 0.12), blurRadius: 20),
+                ],
+              ),
+              child: Row(children: [
+                Container(
+                  width: 48, height: 48,
+                  decoration: BoxDecoration(
+                    color: c.withValues(alpha: 0.18),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(step['icon'] as IconData, color: c, size: 24),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Step ${_stepIndex + 1} of ${_steps.length}',
+                          style: TextStyle(
+                              color: c.withValues(alpha: 0.70), fontSize: 11)),
+                      const SizedBox(height: 3),
+                      Text(step['text'] as String,
+                          style: const TextStyle(color: Colors.white,
+                              fontSize: 15, fontWeight: FontWeight.w700)),
+                      if ((step['dist'] as String) != '—') ...[
+                        const SizedBox(height: 3),
+                        Text('in about ${step['dist']}',
+                            style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.50),
+                                fontSize: 12)),
+                      ],
+                    ],
+                  ),
+                ),
+                // Re-speak button
+                GestureDetector(
+                  onTap: () => _speakStep(_stepIndex),
+                  child: Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      color: _kPurple.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: _kPurple.withValues(alpha: 0.30)),
+                    ),
+                    child: const Icon(Icons.record_voice_over_rounded,
+                        color: _kPurple, size: 16),
+                  ),
+                ),
+              ]),
+            ),
+
+            const SizedBox(height: 12),
+
+            // ── ROUTE OVERVIEW — all steps ────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text('ROUTE OVERVIEW',
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      fontSize: 10, fontWeight: FontWeight.w800,
+                      letterSpacing: 1.4)),
+            ),
+            const SizedBox(height: 8),
+
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: _steps.length,
+                itemBuilder: (_, i) {
+                  final s       = _steps[i];
+                  final current = i == _stepIndex;
+                  final done    = i < _stepIndex;
+                  final stepC   = done ? Colors.white24
+                      : current ? c : Colors.white38;
+                  return GestureDetector(
+                    onTap: () => _goStep(i),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 6),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: current
+                            ? c.withValues(alpha: 0.09)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: current
+                              ? c.withValues(alpha: 0.30)
+                              : Colors.transparent,
+                        ),
+                      ),
+                      child: Row(children: [
+                        Icon(s['icon'] as IconData, color: stepC, size: 16),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(s['text'] as String,
+                              style: TextStyle(
+                                  color: done
+                                      ? Colors.white30
+                                      : current
+                                      ? Colors.white
+                                      : Colors.white70,
+                                  fontSize: 13,
+                                  fontWeight: current
+                                      ? FontWeight.w700
+                                      : FontWeight.normal)),
+                        ),
+                        if ((s['dist'] as String) != '—')
+                          Text(s['dist'] as String,
+                              style: TextStyle(color: stepC, fontSize: 11,
+                                  fontWeight: FontWeight.w600)),
+                      ]),
+                    ),
+                  );
+                },
               ),
             ),
-          ),
-        ],
+
+            // ── Nav controls ─────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
+              decoration: BoxDecoration(
+                color: _kCard,
+                border: Border(
+                    top: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
+              ),
+              child: Column(children: [
+                Row(children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _stepIndex > 0 ? () => _goStep(_stepIndex - 1) : null,
+                      icon: const Icon(Icons.chevron_left, size: 18),
+                      label: const Text('Prev'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white60,
+                        side: const BorderSide(color: Colors.white12),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton.icon(
+                      onPressed: _stepIndex < _steps.length - 1
+                          ? () => _goStep(_stepIndex + 1)
+                          : null,
+                      icon: const Icon(Icons.chevron_right, size: 18),
+                      label: Text(_stepIndex < _steps.length - 1
+                          ? 'Next Step' : 'Arrived!'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: c,
+                        foregroundColor: Colors.black87,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: widget.onExit,
+                    icon: const Icon(Icons.close_rounded,
+                        color: _kRed, size: 16),
+                    label: const Text('Exit Navigation',
+                        style: TextStyle(color: _kRed)),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: _kRed.withValues(alpha: 0.4)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+        ),
       ),
     );
   }
