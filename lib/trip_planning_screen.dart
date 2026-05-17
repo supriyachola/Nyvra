@@ -2514,6 +2514,271 @@ class _RouteAnalysisScreenState extends State<RouteAnalysisScreen> {
     'rr nagar':            [12.9314, 77.5008],
     'rajarajeshwari nagar': [12.9314, 77.5008],
     'mysore road':         [12.9414, 77.5208],
+    'amc engineering college': [12.8437, 77.5800], 'amc college': [12.8437, 77.5800], 'amcec': [12.8437, 77.5800],
+    'nagarjuna college of engineering': [13.2284, 77.4181], 'nagarjuna engineering college': [13.2284, 77.4181], 'ncet': [13.2284, 77.4181],
+    'rajarajeswari college of engineering': [12.8853, 77.4950], 'rrce': [12.8853, 77.4950], 'rr institute of technology': [12.9500, 77.4800],
+    'ms engineering college': [13.1200, 77.6400], 'msec': [13.1200, 77.6400],
+    'atria institute of technology': [13.0320, 77.5649], 'atria': [13.0320, 77.5649],
+    'acharya institute of technology': [13.0846, 77.4778], 'acharya': [13.0846, 77.4778],
+    'sapthagiri college of engineering': [13.0780, 77.4950],
+    'sapthagiri': [13.0780, 77.4950],
+    'global academy of technology': [12.9081, 77.4833],
+    'gat': [12.9081, 77.4833],
+    'bnmit': [12.9087, 77.5662],
+    'bnm institute of technology': [12.9087, 77.5662],
+    'cambridge institute of technology': [12.9137, 77.6950],
+    'cambridge college': [12.9137, 77.6950],
+    'sambhram institute of technology': [13.1000, 77.5600],
+    'sambhram': [13.1000, 77.5600],
+    'new horizon engineering college': [12.9890, 77.6970],
+    'nhei': [12.9890, 77.6970],
+    'oxford college of engineering': [12.8850, 77.6040],
+    'oxford engineering college': [12.8850, 77.6040],
+    't john institute of technology': [12.8740, 77.5970],
+    't john college': [12.8740, 77.5970],
+    'hkbk college of engineering': [13.0675, 77.6240],
+    'hkbk': [13.0675, 77.6240],
+    'ks institute of technology': [12.9080, 77.5000],
+    'ksit': [12.9080, 77.5000],
+    'dr ambedkar institute of technology': [13.0950, 77.4840],
+    'ambedkar engineering college': [13.0950, 77.4840],
+    'vivekananda institute of technology': [12.8860, 77.6950],
+    'vit bangalore': [12.8860, 77.6950],
+    'rajarajeswari medical college': [12.8845, 77.4980],
+    'rr medical college': [12.8845, 77.4980],
+    'ms ramaiah medical college': [13.0300, 77.5600],
+    'ramaiah medical college': [13.0300, 77.5600],
+    'st john medical college': [12.9237, 77.6190],
+    'st johns medical college': [12.9237, 77.6190],
+    'vydehi medical college': [12.9850, 77.7300],
+    'vydehi': [12.9850, 77.7300],
+    'kempegowda medical college': [12.9600, 77.5700],
+    'kims': [12.9600, 77.5700],
+    'bgs medical college': [12.9030, 77.4830],
+    'bgs': [12.9030, 77.4830],
+    'akash medical college': [13.2000, 77.7100],
+    'akash institute': [13.2000, 77.7100],
+    'cmr university': [13.1150, 77.6350],
+    'reva': [13.1150, 77.6220],
+    'presidency college': [13.1000, 77.5900],
+    'garden city university': [13.0325, 77.6910],
+    'adichunchanagiri university': [12.9716, 77.5946],
+
+    'iit bangalore':                   [13.0130, 77.5700],
+    'iim bangalore':                   [13.0694, 77.5985],
+    'iim b':                           [13.0694, 77.5985],
+    'iisc':                            [13.0212, 77.5666],
+    'indian institute of science':     [13.0212, 77.5666],
+    'rvce':                            [12.9231, 77.4991],
+    'rv college of engineering':       [12.9231, 77.4991],
+    'ms ramaiah institute':            [13.0032, 77.5706],
+    'bit bangalore':                   [12.9636, 77.5858],
+    'bangalore institute of technology': [12.9636, 77.5858],
+    'bms college of engineering':      [12.9405, 77.5717],
+    'bmsce':                           [12.9405, 77.5717],
+    'nie bangalore':                   [12.9716, 77.5946],
+    'pesit':                           [12.9231, 77.4991],
+    'pes university':                  [12.9231, 77.4991],
+    'pes university electronic city':  [12.8458, 77.6603],
+    'vtu bangalore':                   [12.9716, 77.5946],
+    'dayananda sagar college':         [12.9100, 77.5700],
+    'dayananda sagar university':      [12.9100, 77.5700],
+    'reva university':                 [13.1186, 77.6220],
+    'jain university':                 [12.9716, 77.5946],
+    'jain college whitefield':         [12.9698, 77.7499],
+    'christ university':               [12.9263, 77.6074],
+    'christ college':                  [12.9263, 77.6074],
+    'new horizon college':             [12.9858, 77.7100],
+    'bangalore university':            [12.9588, 77.5734],
+    'central college':                 [12.9779, 77.5908],
+    'national law school':             [13.0694, 77.5985],
+    'nlsiu':                           [13.0694, 77.5985],
+    'cmrit':                           [13.0068, 77.6873],
+    'cmr institute of technology':     [13.0068, 77.6873],
+    'mvit':                            [13.1500, 77.5900],
+    'sir mvit':                        [13.1500, 77.5900],
+    'east west college':               [12.9398, 77.5717],
+    'alliance university':             [12.8568, 77.7860],
+    'gitam university bangalore':      [12.9716, 77.5946],
+    'presidency university':           [13.1000, 77.5900],
+    'nitte meenakshi institute':       [13.1150, 77.5950],
+    'nitte':                           [13.1150, 77.5950],
+    'amity university bangalore':      [13.1300, 77.6200],
+    'bangalore college of engineering': [12.9716, 77.5946],
+    'bangalore medical college':       [12.9611, 77.5762],
+    'bmcri':                           [12.9611, 77.5762],
+    'kims bangalore':                  [12.9200, 77.5500],
+    'manipal college of dental sciences': [12.9716, 77.5946],
+    'sjbit':                           [12.9716, 77.5200],
+
+    // Arts, Science & Commerce
+    'mount carmel college':            [12.9914, 77.5908],
+    'st josephs college':              [12.9779, 77.5908],
+    'st josephs':                      [12.9779, 77.5908],
+    'mla college':                     [12.9500, 77.6300],
+    'vijaya college':                  [12.9422, 77.5740],
+    'national college basavanagudi':   [12.9422, 77.5740],
+    'ambedkar veedhi':                 [12.9779, 77.5850],
+    'garuda college':                  [12.9716, 77.5946],
+    'bengaluru north university':      [13.0600, 77.5800],
+    'sjc bangalore':                   [12.9950, 77.5850],
+    'baldwin college':                 [12.9700, 77.6100],
+    'bishop cotton':                   [12.9700, 77.5900],
+    'frank anthony school':            [12.9700, 77.5900],
+    'clarence high school':            [12.9600, 77.5900],
+    'women christian college':         [12.9716, 77.5946],
+
+    // ════════════════════════════════════════════════════════════════════════
+    // BENGALURU — HOSPITALS
+    // ════════════════════════════════════════════════════════════════════════
+    'victoria hospital':               [12.9611, 77.5762],
+    'bowring hospital':                [12.9784, 77.6008],
+    'nimhans':                         [12.9414, 77.5958],
+    'nimhans campus':                  [12.9414, 77.5958],
+    'st johns hospital':               [12.9263, 77.6274],
+    'manipal hospital':                [12.9534, 77.6408],
+    'manipal hospital old airport road': [12.9534, 77.6408],
+    'apollo hospital bangalore':       [12.9616, 77.6530],
+    'apollo hospital':                 [12.9616, 77.6530],
+    'fortis hospital':                 [12.9116, 77.6473],
+    'fortis bangalore':                [12.9116, 77.6473],
+    'narayana health city':            [12.8458, 77.6603],
+    'narayana hospital':               [12.8458, 77.6603],
+    'bgs hospital':                    [12.9231, 77.4991],
+    'columbia asia hospital':          [12.9900, 77.6300],
+    'aster cmi hospital':              [13.0450, 77.5970],
+    'aster rv hospital':               [12.9266, 77.6074],
+    'sakra premium clinic':            [12.9600, 77.7000],
+    'sakra world hospital':            [12.9358, 77.7143],
+    'sparsh hospital':                 [13.0032, 77.5706],
+    'ms ramaiah hospital':             [13.0032, 77.5706],
+    'msrh':                            [13.0032, 77.5706],
+    'kidwai cancer institute':         [12.9414, 77.5858],
+    'kidwai':                          [12.9414, 77.5858],
+    'ramaiah memorial hospital':       [13.0032, 77.5706],
+    'wockhardt hospital':              [12.9784, 77.6408],
+    'cloudnine hospital':              [12.9784, 77.6408],
+    'cloudnine koramangala':           [12.9279, 77.6271],
+    'msr hospital':                    [13.0032, 77.5706],
+    'jayadeva hospital':               [12.9314, 77.5837],
+    'sri jayadeva':                    [12.9314, 77.5837],
+    'bangalore baptist hospital':      [13.0150, 77.5800],
+    'kempegowda institute':            [12.9611, 77.5762],
+    'kims hospital':                   [12.9200, 77.5500],
+    'oxford hospital':                 [12.9279, 77.6271],
+    'people tree hospital':            [13.0600, 77.5500],
+    'rainbow hospital':                [12.9116, 77.6473],
+    'motherhood hospital':             [12.9279, 77.6271],
+    'akash hospital':                  [13.0450, 77.5650],
+    'health city':                     [12.8458, 77.6603],
+
+    // ════════════════════════════════════════════════════════════════════════
+    // BENGALURU — FAMOUS PLACES & LANDMARKS
+    // ════════════════════════════════════════════════════════════════════════
+    // Parks & Nature
+    'lalbagh botanical garden':        [12.9500, 77.5840],
+    'lalbagh garden':                  [12.9500, 77.5840],
+    'bannerghatta biological park':    [12.8635, 77.5978],
+    'bannerghatta zoo':                [12.8635, 77.5978],
+    'ulsoor lake':                     [12.9784, 77.6208],
+    'hesaraghatta lake':               [13.1350, 77.4150],
+    'turahalli forest':                [12.8900, 77.5400],
+    'agara lake':                      [12.9116, 77.6473],
+
+    // Malls & Shopping
+    'phoenix marketcity':              [12.9958, 77.6974],
+    'phoenix mall whitefield':         [12.9958, 77.6974],
+    'forum mall':                      [12.9266, 77.6074],
+    'forum koramangala':               [12.9266, 77.6074],
+    'forum rex walk':                  [12.9116, 77.6473],
+    'forum hodnur mall':               [12.9116, 77.6273],
+    'ub city':                         [12.9714, 77.5908],
+    'orion mall':                      [12.9950, 77.5550],
+    'orion east':                      [13.0200, 77.6200],
+    'mantri square':                   [12.9950, 77.5550],
+    'garuda mall':                     [12.9714, 77.6108],
+    'garuda mall magrath road':        [12.9714, 77.6108],
+    'central mall':                    [12.9714, 77.6108],
+    'total mall':                      [12.8900, 77.5978],
+    'royal meenakshi mall':            [12.8900, 77.5978],
+    'rmz infinity':                    [13.0068, 77.6873],
+    'elements mall':                   [13.0450, 77.5970],
+    'gopalan mall':                    [12.9568, 77.5308],
+    'gopalan innovation mall':         [12.9400, 77.5300],
+    'vega city mall':                  [12.9050, 77.5773],
+
+    // Temples & Religious
+    'iskcon temple bangalore':         [13.0100, 77.5500],
+    'iskcon':                          [13.0100, 77.5500],
+    'bull temple':                     [12.9422, 77.5740],
+    'dodda ganapathi temple':          [12.9422, 77.5740],
+    'gavi gangadhareshwara':           [12.9422, 77.5740],
+    'ulsoor ganapathi temple':         [12.9784, 77.6208],
+    'st marys basilica':               [12.9779, 77.6008],
+    'st patricks church':              [12.9700, 77.5900],
+    'jama masjid bangalore':           [12.9700, 77.5700],
+    'shree venkateshwara temple':      [12.9716, 77.5946],
+
+    // Entertainment & Tourist
+    'bangalore palace':                [12.9984, 77.5908],
+    'tipu sultan palace':              [12.9611, 77.5762],
+    'attara kacheri':                  [12.9779, 77.5900],
+    'town hall':                       [12.9779, 77.5908],
+    'freedom park':                    [12.9779, 77.5750],
+    'raj bhavan':                      [12.9950, 77.5850],
+    'kanteerava stadium':              [12.9779, 77.5908],
+    'chinnaswamy stadium':             [12.9784, 77.6008],
+    'm chinnaswamy stadium':           [12.9784, 77.6008],
+    'national science museum':         [12.9763, 77.5929],
+    'wonderla':                        [12.8318, 77.5004],
+    'eagleton resort':                 [12.9716, 77.4000],
+    'fun world':                       [13.0100, 77.5700],
+    'innovative multiplex':            [12.9116, 77.6473],
+    'inox lido':                       [12.9714, 77.6108],
+    'pvr cinemas':                     [12.9958, 77.6974],
+    'pvr orion':                       [12.9950, 77.5550],
+    'samsung opera house':             [12.9784, 77.6408],
+
+    // Metro Stations (key ones)
+    'majestic metro':                  [12.9779, 77.5713],
+    'kempegowda metro':                [12.9779, 77.5713],
+    'mg road metro':                   [12.9714, 77.6108],
+    'indiranagar metro':               [12.9784, 77.6408],
+    'byappanahalli metro':             [12.9984, 77.6608],
+    'whitefield metro':                [12.9698, 77.7499],
+    'silk board metro':                [12.9166, 77.6237],
+    'jp nagar metro':                  [12.9066, 77.5873],
+    'bannerghatta road metro':         [12.8900, 77.5978],
+    'nagasandra metro':                [13.0600, 77.5200],
+    'yeshwanthpur metro':              [13.0200, 77.5500],
+    'rajajinagar metro':               [12.9950, 77.5550],
+
+    // Tech Parks
+    'embassy tech village':            [12.9258, 77.6743],
+    'bagmane tech park':               [12.9784, 77.6408],
+    'manyata':                         [13.0450, 77.6150],
+    'embassy golf links':              [12.9616, 77.6530],
+    'cessna business park':            [12.9258, 77.6743],
+    'prestige tech park':              [12.9258, 77.6743],
+    'global tech park':                [12.9698, 77.7499],
+    'salarpuria tech park':            [12.9568, 77.6974],
+    'divyashree tech park':            [12.9591, 77.6974],
+    'ecospace':                        [12.9258, 77.6743],
+    'intel bangalore':                 [12.9698, 77.7499],
+    'wipro headquarters':              [12.9231, 77.4991],
+    'wipro campus':                    [12.9231, 77.4991],
+    'infosys bangalore':               [12.8458, 77.6603],
+    'infosys campus':                  [12.8458, 77.6603],
+    'accenture bangalore':             [12.9591, 77.6974],
+    'ibm india':                       [12.9591, 77.6974],
+
+    // Restaurants & Cafes (popular)
+    'vidyarthi bhavan':                [12.9422, 77.5740],
+    'mtr restaurant':                  [12.9422, 77.5740],
+    'koshy\'s restaurant':             [12.9714, 77.6008],
+    'the fatty bao':                   [12.9279, 77.6271],
+    'toit brewery':                    [12.9784, 77.6408],
+    'church street social':            [12.9714, 77.6108],
 
     // ════════════════════════════════════════════════════════════════════════
     // BENGALURU SOUTH-EAST
@@ -3208,20 +3473,28 @@ class _RouteAnalysisScreenState extends State<RouteAnalysisScreen> {
   }
 
   void _selectRoute(RouteOption route) {
-    // Resolve destination coords so we can pass them to HeatmapScreen
-    // for the colored safe-route line feature.
+    // Resolve destination coords so we can pass them to HeatmapScreen.
     final destCoords = _resolveCoords(widget.destination);
     double? dLat = destCoords?[0];
     double? dLng = destCoords?[1];
 
-    // Use the same origin-offset fallback used in _analyzeRoutes so the
-    // route line still renders even for unlisted destinations.
-    if ((dLat == null || dLng == null) &&
-        widget.currentLat != null &&
-        widget.currentLng != null) {
-      dLat = widget.currentLat! + 0.05;
-      dLng = widget.currentLng! + 0.05;
+    // Only use the fallback if we genuinely have no coords —
+    // the old +0.05 offset sent the user to a random field.
+    if (dLat == null || dLng == null) {
+      dLat = null;
+      dLng = null;
     }
+
+    // Convert RouteOption (trip_planning model) → RouteData (heatmap model)
+    // so HeatmapScreen / NavigationScreen can use the already-analyzed result.
+    final preloaded = RouteData(
+      name:          route.name,
+      duration:      route.duration,
+      distance:      route.distance,
+      safetyScore:   route.safetyScore,
+      factors:       route.factors,
+      isRecommended: route.isRecommended,
+    );
 
     showModalBottomSheet(
       context: context,
@@ -3232,19 +3505,21 @@ class _RouteAnalysisScreenState extends State<RouteAnalysisScreen> {
         destination: widget.destination,
         trustedContacts: widget.trustedContacts,
         onStart: () async {
-          // Close the confirmation sheet, then open the in-app Safety Heatmap
-          // with the colored safe-route line drawn automatically.
           Navigator.pop(context);
           if (context.mounted) {
             Navigator.push(
               context,
               MaterialPageRoute(
                 builder: (_) => HeatmapScreen(
-                  initialLat:       widget.currentLat,
-                  initialLng:       widget.currentLng,
-                  destinationLabel: widget.destination,
-                  destLat:          dLat,   // ← passes destination for route coloring
-                  destLng:          dLng,   // ← passes destination for route coloring
+                  initialLat:          widget.currentLat,
+                  initialLng:          widget.currentLng,
+                  destinationLabel:    widget.destination,
+                  destLat:             dLat,
+                  destLng:             dLng,
+                  // ✅ FIX: pass the already-analyzed route — no double API call
+                  preloadedRoute:      preloaded,
+                  // ✅ FIX: open navigation immediately on arrival
+                  autoStartNavigation: true,
                 ),
               ),
             );
